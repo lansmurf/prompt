@@ -2,6 +2,7 @@ import os
 import sys
 from pathlib import Path
 from io import StringIO
+from collections import defaultdict
 
 import click
 import pathspec
@@ -12,14 +13,16 @@ LARGE_CONTENT_THRESHOLD_PERCENT = 35
 # --- Output Formatting & Tree Generation ---
 
 def generate_tree_output(file_paths, project_root):
-    """Generates a string representing the directory tree for the given files."""
     tree = {}
     for path in file_paths:
-        relative_path = path.relative_to(project_root)
-        parts = list(relative_path.parts)
-        current_level = tree
-        for part in parts:
-            current_level = current_level.setdefault(part, {})
+        try:
+            relative_path = path.relative_to(project_root)
+            parts = list(relative_path.parts)
+            current_level = tree
+            for part in parts:
+                current_level = current_level.setdefault(part, {})
+        except ValueError:
+            tree[str(path)] = {}
 
     def build_tree_string(d, prefix=""):
         s = ""
@@ -31,12 +34,16 @@ def generate_tree_output(file_paths, project_root):
                 extension = "    " if i == len(items) - 1 else "│   "
                 s += build_tree_string(d[key], prefix + extension)
         return s
+    
+    # Use relative path for the root of the tree if possible
+    try:
+        root_display_name = project_root.relative_to(Path.cwd())
+    except ValueError:
+        root_display_name = project_root.name
 
-    return f"{project_root.name}/\n{build_tree_string(tree)}"
-
+    return f"{root_display_name}/\n{build_tree_string(tree)}"
 
 def add_line_numbers(content):
-    """Prepends line numbers to a string of content."""
     lines = content.splitlines()
     max_digits = len(str(len(lines)))
     return "\n".join(f"{str(i+1).rjust(max_digits)} | {line}" for i, line in enumerate(lines))
@@ -59,7 +66,6 @@ def print_as_markdown(writer, path, content):
     while backticks in content:
         backticks += "`"
     writer(f"{path}\n{backticks}{lang}\n{content_with_lines}\n{backticks}\n")
-
 
 # --- File Collection & Analysis ---
 
@@ -105,38 +111,53 @@ def collect_files(paths, include, exclude, no_gitignore):
                 dirs[:] = [d for d in dirs if not is_ignored(root_path / d, gitignore_specs)]
                 files = [f for f in files if not is_ignored(root_path / f, gitignore_specs)]
             for file_name in files: all_files.add(root_path / file_name)
-
+    
+    cwd = Path.cwd()
     exclude_spec = pathspec.PathSpec.from_lines('gitwildmatch', exclude)
-    filtered_files = [p for p in all_files if not exclude_spec.match_file(str(p.relative_to(Path.cwd())))]
-
+    filtered_files = [p for p in all_files if not exclude_spec.match_file(str(p.relative_to(cwd)))]
+    
     if include:
         include_spec = pathspec.PathSpec.from_lines('gitwildmatch', include)
-        filtered_files = [p for p in filtered_files if include_spec.match_file(str(p.relative_to(Path.cwd())))]
+        filtered_files = [p for p in filtered_files if include_spec.match_file(str(p.relative_to(cwd)))]
 
     return sorted(filtered_files)
 
-def analyze_content_sizes(file_contents, initial_paths):
-    """Identifies files or directories contributing a large percentage of total content."""
+def analyze_content_sizes(file_contents):
+    """Recursively finds the nearest directories/files that exceed the size threshold."""
     total_size = sum(len(c) for c in file_contents.values())
-    if total_size == 0:
-        return []
+    if total_size == 0: return []
 
-    large_items = []
-    # Check individual files
+    cwd = Path.cwd()
+    item_sizes = defaultdict(int)
+
+    # 1. Bubble up sizes from files to all their parent directories
     for path, content in file_contents.items():
         size = len(content)
+        relative_path = path.relative_to(cwd)
+        item_sizes[relative_path] += size
+        for parent in relative_path.parents:
+            if str(parent) != '.':
+                item_sizes[parent] += size
+    
+    # 2. Identify all items (files or dirs) that exceed the threshold
+    potential_culprits = set()
+    for path, size in item_sizes.items():
         if (size / total_size * 100) > LARGE_CONTENT_THRESHOLD_PERCENT:
-            large_items.append((path.relative_to(Path.cwd()), size / total_size * 100))
+            potential_culprits.add(path)
 
-    # Check top-level directories provided by the user
-    initial_paths_resolved = [Path(p).resolve() for p in initial_paths if Path(p).is_dir()]
-    for dir_path in initial_paths_resolved:
-        dir_size = sum(len(c) for p, c in file_contents.items() if dir_path in p.parents)
-        if (dir_size / total_size * 100) > LARGE_CONTENT_THRESHOLD_PERCENT:
-            large_items.append((dir_path.relative_to(Path.cwd()), dir_size / total_size * 100))
+    # 3. Find the "nearest" culprits by removing any culprit that has a parent also in the list
+    final_culprits = set()
+    for path in potential_culprits:
+        is_nearest = True
+        for parent in path.parents:
+            if parent in potential_culprits:
+                is_nearest = False
+                break
+        if is_nearest:
+            final_culprits.add(path)
 
-    # Return unique items
-    return sorted(list(set(item[0] for item in large_items)))
+    return sorted(list(final_culprits))
+
 
 # --- Main CLI ---
 
@@ -151,9 +172,6 @@ def analyze_content_sizes(file_contents, initial_paths):
 @click.option("-C", "--copy", is_flag=True, help="Copy the final output to the clipboard.")
 @click.version_option()
 def cli(paths, include, exclude, no_gitignore, output, cxml, markdown, copy):
-    """
-    Outputs the contents of files from specified paths, with filtering and a project tree.
-    """
     if not paths and sys.stdin.isatty():
         raise click.UsageError("No paths provided. Provide paths as arguments or pipe from stdin.")
     if not paths:
@@ -167,15 +185,9 @@ def cli(paths, include, exclude, no_gitignore, output, cxml, markdown, copy):
             click.echo("No files found matching the criteria.", err=True)
             return
 
-        file_contents = {}
-        for file_path in files_to_process:
-            try:
-                with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
-                    file_contents[file_path] = f.read()
-            except IOError as e:
-                click.echo(f"Warning: Skipping file {file_path} due to error: {e}", err=True)
+        file_contents = {fp: fp.read_text(encoding='utf-8', errors='ignore') for fp in files_to_process}
         
-        large_items = analyze_content_sizes(file_contents, paths)
+        large_items = analyze_content_sizes(file_contents)
         
         if large_items:
             click.echo("Warning: The following items contribute a large portion of the total output:", err=True)
@@ -183,27 +195,25 @@ def cli(paths, include, exclude, no_gitignore, output, cxml, markdown, copy):
                 click.echo(f"  - {item}", err=True)
             
             if click.confirm("Do you want to automatically exclude them and regenerate the output?", err=True):
-                current_exclude.extend(f"{str(item)}/**" if Path(item).is_dir() else str(item) for item in large_items)
+                current_exclude.extend(f"{item}/**" if item.is_dir() else str(item) for item in large_items)
                 click.echo("Regenerating output with new exclusions...", err=True)
-                continue # Restart the loop
+                continue
             else:
                 click.echo("Proceeding with the original file selection.", err=True)
-                break # Exit loop and proceed with large files
+                break
         else:
-            break # No large items, exit loop and proceed
+            break
 
     string_buffer = StringIO()
     writer = string_buffer.write
 
-    # 1. Add the project tree
-    project_root = Path.cwd() # Or determine a more specific root if desired
+    project_root = Path(os.path.commonpath(files_to_process)) if files_to_process else Path.cwd()
     tree_str = generate_tree_output(files_to_process, project_root)
     writer(f"Project Structure:\n```\n{tree_str}\n```\n\n")
 
-    # 2. Add file contents
     if cxml: writer("<documents>\n")
     for idx, (file_path, content) in enumerate(file_contents.items()):
-        relative_path = file_path.relative_to(project_root)
+        relative_path = file_path.relative_to(Path.cwd())
         if cxml: print_as_xml(writer, relative_path, content, idx + 1)
         elif markdown: print_as_markdown(writer, relative_path, content)
         else: print_default(writer, relative_path, content)
