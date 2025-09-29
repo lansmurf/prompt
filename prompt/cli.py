@@ -10,6 +10,23 @@ import pyperclip
 
 LARGE_CONTENT_THRESHOLD_PERCENT = 35
 DEFAULT_OUTPUT_FILENAME = "PROMPT_OUTPUT.txt"
+DEFAULT_BINARY_EXTENSIONS = {
+    # Images
+    '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.tif', '.tiff', '.webp',
+    # Audio/Video
+    '.mp3', '.wav', '.flac', '.ogg', '.m4a', '.aac', '.mp4', '.mov', '.avi', '.mkv',
+    # Archives
+    '.zip', '.tar', '.gz', '.rar', '.7z',
+    # Documents
+    '.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx',
+    # Compiled code / binaries
+    '.pyc', '.so', '.dll', '.exe', '.o', '.a', '.jar', '.class',
+    # Databases
+    '.db', '.sqlite', '.sqlite3',
+    # Fonts
+    '.ttf', '.otf', '.woff', '.woff2',
+}
+
 
 # --- Output Formatting & Tree Generation ---
 
@@ -157,19 +174,23 @@ def analyze_content_sizes(file_contents):
 @click.option("-i", "--include", multiple=True, help="Glob pattern for files to include.")
 @click.option("-x", "--exclude", multiple=True, help="Glob pattern for files/directories to exclude.")
 @click.option("--no-gitignore", is_flag=True, help="Disable parsing of .gitignore files.")
+@click.option("--no-binary-filter", is_flag=True, help="Disable the default filter for binary files.")
 @click.option("-o", "--output", type=click.File('w', encoding='utf-8'), help="Output to a file instead of stdout.")
 @click.option("-c", "--cxml", is_flag=True, help="Output in XML-ish format suitable for Claude.")
 @click.option("-m", "--markdown", is_flag=True, help="Output Markdown with fenced code blocks.")
 @click.option("-C", "--copy", is_flag=True, help="Copy the final output to the clipboard.")
 @click.version_option()
-def cli(paths, include, exclude, no_gitignore, output, cxml, markdown, copy):
+def cli(paths, include, exclude, no_gitignore, no_binary_filter, output, cxml, markdown, copy):
     if not paths and sys.stdin.isatty():
         raise click.UsageError("No paths provided. Provide paths as arguments or pipe from stdin.")
     if not paths:
         paths = [line.strip() for line in sys.stdin if line.strip()]
 
     current_exclude = list(exclude)
-    
+    if not no_binary_filter:
+        # Add default binary extensions to the exclude list as glob patterns
+        current_exclude.extend(f"*{ext}" for ext in DEFAULT_BINARY_EXTENSIONS)
+
     while True:
         files_to_process = collect_files(paths, include, current_exclude, no_gitignore)
         if not files_to_process:
@@ -213,7 +234,6 @@ def cli(paths, include, exclude, no_gitignore, output, cxml, markdown, copy):
         
     final_output = string_buffer.getvalue()
 
-    # --- New Output Logic ---
     if copy:
         pyperclip.copy(final_output)
         click.echo("Output copied to clipboard.", err=True)
@@ -221,7 +241,6 @@ def cli(paths, include, exclude, no_gitignore, output, cxml, markdown, copy):
     if output:
         output.write(final_output)
     elif not copy:
-        # Default behavior: write to a file if not copying and -o is not used
         with open(DEFAULT_OUTPUT_FILENAME, "w", encoding="utf-8") as f:
             f.write(final_output)
         click.echo(f"Output written to {DEFAULT_OUTPUT_FILENAME}", err=True)
