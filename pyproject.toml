@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "prompt"
+version = "0.1.0"
+authors = [
+  { name="lansmurf", email="yeswondwerr@gmail.com" },
+]
+description = "A CLI tool to build context prompts from source files."
+readme = "README.md" # It's good practice to add a README
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "click",
+    "pathspec",
+    "pyperclip",
+]
+
+[project.urls]
+Homepage = "https://github.com/lansmurf/prompt" # Example URL
+
+[project.scripts]
+prompt = "prompt_builder.cli:cli"
