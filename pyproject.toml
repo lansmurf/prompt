@@ -26,4 +26,4 @@ dependencies = [
 Homepage = "https://github.com/lansmurf/prompt" # Example URL
 
 [project.scripts]
-prompt = "prompt_builder.cli:cli"
+prompt = "prompt.cli:cli"
