@@ -9,6 +9,7 @@ import pathspec
 import pyperclip
 
 LARGE_CONTENT_THRESHOLD_PERCENT = 35
+DEFAULT_OUTPUT_FILENAME = "PROMPT_OUTPUT.txt"
 
 # --- Output Formatting & Tree Generation ---
 
@@ -35,7 +36,6 @@ def generate_tree_output(file_paths, project_root):
                 s += build_tree_string(d[key], prefix + extension)
         return s
     
-    # Use relative path for the root of the tree if possible
     try:
         root_display_name = project_root.relative_to(Path.cwd())
     except ValueError:
@@ -123,14 +123,12 @@ def collect_files(paths, include, exclude, no_gitignore):
     return sorted(filtered_files)
 
 def analyze_content_sizes(file_contents):
-    """Recursively finds the nearest directories/files that exceed the size threshold."""
     total_size = sum(len(c) for c in file_contents.values())
     if total_size == 0: return []
 
     cwd = Path.cwd()
     item_sizes = defaultdict(int)
 
-    # 1. Bubble up sizes from files to all their parent directories
     for path, content in file_contents.items():
         size = len(content)
         relative_path = path.relative_to(cwd)
@@ -139,25 +137,18 @@ def analyze_content_sizes(file_contents):
             if str(parent) != '.':
                 item_sizes[parent] += size
     
-    # 2. Identify all items (files or dirs) that exceed the threshold
     potential_culprits = set()
     for path, size in item_sizes.items():
         if (size / total_size * 100) > LARGE_CONTENT_THRESHOLD_PERCENT:
             potential_culprits.add(path)
 
-    # 3. Find the "nearest" culprits by removing any culprit that has a parent also in the list
     final_culprits = set()
     for path in potential_culprits:
-        is_nearest = True
-        for parent in path.parents:
-            if parent in potential_culprits:
-                is_nearest = False
-                break
+        is_nearest = all(parent not in potential_culprits for parent in path.parents)
         if is_nearest:
             final_culprits.add(path)
 
     return sorted(list(final_culprits))
-
 
 # --- Main CLI ---
 
@@ -222,13 +213,18 @@ def cli(paths, include, exclude, no_gitignore, output, cxml, markdown, copy):
         
     final_output = string_buffer.getvalue()
 
+    # --- New Output Logic ---
     if copy:
         pyperclip.copy(final_output)
         click.echo("Output copied to clipboard.", err=True)
+
     if output:
         output.write(final_output)
-    if not output and not copy:
-        click.echo(final_output)
+    elif not copy:
+        # Default behavior: write to a file if not copying and -o is not used
+        with open(DEFAULT_OUTPUT_FILENAME, "w", encoding="utf-8") as f:
+            f.write(final_output)
+        click.echo(f"Output written to {DEFAULT_OUTPUT_FILENAME}", err=True)
 
 if __name__ == "__main__":
     cli()
