@@ -9,7 +9,7 @@ import pathspec
 import pyperclip
 
 LARGE_CONTENT_THRESHOLD_PERCENT = 35
-DEFAULT_OUTPUT_FILENAME = "PROMPT_OUTPUT.txt"
+DEFAULT_OUTPUT_FILENAME = "out.txt"
 DEFAULT_BINARY_EXTENSIONS = {
     # Images
     '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.tif', '.tiff', '.webp',
@@ -25,6 +25,8 @@ DEFAULT_BINARY_EXTENSIONS = {
     '.db', '.sqlite', '.sqlite3',
     # Fonts
     '.ttf', '.otf', '.woff', '.woff2',
+    # Other
+    '.DS_Store'
 }
 
 
