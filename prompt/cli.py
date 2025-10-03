@@ -60,7 +60,7 @@ def generate_tree_output(file_paths, project_root):
     except ValueError:
         root_display_name = project_root.name
 
-    return f"{root_display_name}/\n{build_tree_string(tree)}"
+    return f"./\n{build_tree_string(tree)}"
 
 def add_line_numbers(content):
     lines = content.splitlines()
@@ -69,7 +69,7 @@ def add_line_numbers(content):
 
 def print_default(writer, path, content):
     content_with_lines = add_line_numbers(content)
-    writer(f"{path}\n---\n{content_with_lines}\n---\n")
+    writer(f"\n{path}\n---\n{content_with_lines}\n---\n")
 
 def print_as_xml(writer, path, content, index):
     content_with_lines = add_line_numbers(content)
@@ -84,7 +84,7 @@ def print_as_markdown(writer, path, content):
     backticks = "```"
     while backticks in content:
         backticks += "`"
-    writer(f"{path}\n{backticks}{lang}\n{content_with_lines}\n{backticks}\n")
+    writer(f"\n{path}\n{backticks}{lang}\n{content_with_lines}\n{backticks}\n")
 
 # --- File Collection & Analysis ---
 
@@ -150,12 +150,15 @@ def analyze_content_sizes(file_contents):
 
     for path, content in file_contents.items():
         size = len(content)
-        relative_path = path.relative_to(cwd)
-        item_sizes[relative_path] += size
-        for parent in relative_path.parents:
-            if str(parent) != '.':
-                item_sizes[parent] += size
-    
+        try:
+            relative_path = path.relative_to(cwd)
+            item_sizes[relative_path] += size
+            for parent in relative_path.parents:
+                if str(parent) != '.':
+                    item_sizes[parent] += size
+        except ValueError:
+            item_sizes[path] += size
+            
     potential_culprits = set()
     for path, size in item_sizes.items():
         if (size / total_size * 100) > LARGE_CONTENT_THRESHOLD_PERCENT:
@@ -184,14 +187,13 @@ def analyze_content_sizes(file_contents):
 @click.version_option()
 def cli(paths, include, exclude, no_gitignore, no_binary_filter, output, cxml, markdown, copy):
     if not paths and sys.stdin.isatty():
-        raise click.UsageError("No paths provided. Provide paths as arguments or pipe from stdin.")
-    if not paths:
+        paths = ['.']
+    elif not paths:
         paths = [line.strip() for line in sys.stdin if line.strip()]
 
     current_exclude = list(exclude)
     if not no_binary_filter:
-        # Add default binary extensions to the exclude list as glob patterns
-        current_exclude.extend(f"*{ext}" for ext in DEFAULT_BINARY_EXTENSIONS)
+        current_exclude.extend(f"**/{ext}" for ext in DEFAULT_BINARY_EXTENSIONS)
 
     while True:
         files_to_process = collect_files(paths, include, current_exclude, no_gitignore)
@@ -209,7 +211,7 @@ def cli(paths, include, exclude, no_gitignore, no_binary_filter, output, cxml, m
                 click.echo(f"  - {item}", err=True)
             
             if click.confirm("Do you want to automatically exclude them and regenerate the output?", err=True):
-                current_exclude.extend(f"{item}/**" if item.is_dir() else str(item) for item in large_items)
+                current_exclude.extend(f"{item}/**" if Path(item).is_dir() else str(item) for item in large_items)
                 click.echo("Regenerating output with new exclusions...", err=True)
                 continue
             else:
@@ -223,18 +225,21 @@ def cli(paths, include, exclude, no_gitignore, no_binary_filter, output, cxml, m
 
     project_root = Path(os.path.commonpath(files_to_process)) if files_to_process else Path.cwd()
     tree_str = generate_tree_output(files_to_process, project_root)
-    writer(f"Project Structure:\n```\n{tree_str}\n```\n\n")
+    writer(f"Project Structure:\n```\n{tree_str}\n```\n")
 
     if cxml: writer("<documents>\n")
     for idx, (file_path, content) in enumerate(file_contents.items()):
-        relative_path = file_path.relative_to(Path.cwd())
+        try:
+            relative_path = file_path.relative_to(project_root)
+        except ValueError:
+            relative_path = file_path
+            
         if cxml: print_as_xml(writer, relative_path, content, idx + 1)
         elif markdown: print_as_markdown(writer, relative_path, content)
         else: print_default(writer, relative_path, content)
-        writer("\n")
     if cxml: writer("</documents>")
         
-    final_output = string_buffer.getvalue()
+    final_output = string_buffer.getvalue().strip()
 
     if copy:
         pyperclip.copy(final_output)
